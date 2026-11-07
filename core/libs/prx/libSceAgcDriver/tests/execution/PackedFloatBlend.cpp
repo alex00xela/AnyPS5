@@ -631,6 +631,10 @@ int main(int argc, char** argv) {
             std::puts("skipped, the device lacks fragmentShaderPixelInterlock");
             return VulkanTestSkipped;
         }
+        if (!TargetHasCapability(device->Target(), spv::CapabilityStorageImageReadWithoutFormat)) {
+            std::puts("skipped, the device lacks shaderStorageImageReadWithoutFormat");
+            return VulkanTestSkipped;
+        }
         const ColorTargetLayout layout(Width, Height, ColorTileMode::RenderTarget, 4);
         Block block(layout.Bytes());
         const auto color = DecodeTarget(block);
