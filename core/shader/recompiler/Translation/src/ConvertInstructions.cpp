@@ -76,7 +76,12 @@ IrF32 TranslationContext::convertMagnitudeToF32Directed(IrU32 magnitude, IrU32 s
 }
 
 IrF32 TranslationContext::convertU32ToF32(IrU32 source) {
-    const IrF32 native(ir.Emit(IrOpcode::ConvertF32U32, IrType::F32, {&source.Value()}));
+    const auto halves = [&] {
+        const IrF32 high(ir.Emit(IrOpcode::ConvertF32U32, IrType::F32, {&ir.ShiftRightLogical(source.Value(), ir.Constant(16u))}));
+        const IrF32 low(ir.Emit(IrOpcode::ConvertF32U32, IrType::F32, {&ir.BitwiseAnd(source.Value(), ir.Constant(0xffffu))}));
+        return IrF32(ir.Emit(IrOpcode::FPFma32, IrType::F32, {&high.Value(), &ir.ConstantF32(65536.0f), &low.Value()}));
+    };
+    const IrF32 native = source.Value().Resolve()->Opcode() == IrOpcode::BitFieldSExtract ? halves() : IrF32(ir.Emit(IrOpcode::ConvertF32U32, IrType::F32, {&source.Value()}));
     if (!directedF32Rounding()) {
         return native;
     }

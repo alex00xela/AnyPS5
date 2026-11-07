@@ -153,6 +153,22 @@ std::uint32_t ExactFloatBits(std::uint32_t value, bool signedInteger) {
     return (negative ? 0x80000000u : 0u) | ((msb + 127u) << 23u) | (significand & 0x7fffffu);
 }
 
+std::uint32_t NearestFloatBits(std::uint32_t value) {
+    if (value == 0u) return 0u;
+    auto msb = static_cast<std::uint32_t>(std::bit_width(value) - 1u);
+    if (msb <= 23u) return ExactFloatBits(value, false);
+    const auto shift = msb - 23u;
+    auto significand = value >> shift;
+    const auto rest = value & ((1u << shift) - 1u);
+    const auto half = 1u << (shift - 1u);
+    if (rest > half || (rest == half && (significand & 1u) != 0u)) ++significand;
+    if (significand == (1u << 24u)) {
+        significand >>= 1u;
+        ++msb;
+    }
+    return ((msb + 127u) << 23u) | (significand & 0x7fffffu);
+}
+
 std::uint32_t InsertResult(std::uint32_t bits, std::uint32_t destination, std::uint32_t unused) {
     const auto width = FieldWidth(destination);
     const auto offset = FieldOffset(destination);
@@ -165,17 +181,16 @@ std::uint32_t InsertResult(std::uint32_t bits, std::uint32_t destination, std::u
 void RunConversions(AgcDriver::VulkanDevice& device, bool signedInteger, std::uint32_t waveSize) {
     Require(ExactFloatBits(74565u, false) == 0x4791a280u && ExactFloatBits(1193046u, false) == 0x4991a2b0u,
         "integer-to-f32 model anchors");
+    Require(NearestFloatBits(74565u) == 0x4791a280u && NearestFloatBits(0xffffff00u) == 0x4f7fffffu &&
+        NearestFloatBits(0xffffff80u) == 0x4f800000u && NearestFloatBits(0xffff8081u) == 0x4f7fff81u,
+        "u32-to-f32 rounding model anchors");
     for (std::uint32_t lane = 0u; lane < Threads; ++lane) {
         for (std::uint32_t source = 0u; source < 7u; ++source) {
             for (std::uint32_t sign = 0u; sign < 2u; ++sign) {
                 const auto integer = Integers[lane % Integers.size()];
                 auto word = static_cast<std::uint32_t>(integer);
-                if (!signedInteger) {
-                    if (source == 6u) word = static_cast<std::uint32_t>(integer < 0 ? -integer : integer);
-                    else if (sign != 0u && source < 4u) word &= ~(0x80u << FieldOffset(source));
-                    else if (sign != 0u) word &= ~(0x8000u << FieldOffset(source));
-                }
-                ExactFloatBits(SelectInteger(word, source, sign != 0u), signedInteger);
+                if (!signedInteger && source == 6u) word = static_cast<std::uint32_t>(integer < 0 ? -integer : integer);
+                if (signedInteger) ExactFloatBits(SelectInteger(word, source, sign != 0u), true);
                 ConversionInput[lane * ConversionInputs + source * 2u + sign] = word;
             }
         }
@@ -226,7 +241,8 @@ void RunConversions(AgcDriver::VulkanDevice& device, bool signedInteger, std::ui
                 for (std::uint32_t unused = 0u; unused < 3u; ++unused, ++index) {
                     for (std::uint32_t lane = 0u; lane < Threads; ++lane) {
                         const auto word = ConversionInput[lane * ConversionInputs + source * 2u + sign];
-                        const auto bits = ExactFloatBits(SelectInteger(word, source, sign != 0u), signedInteger);
+                        const auto selected = SelectInteger(word, source, sign != 0u);
+                        const auto bits = signedInteger ? ExactFloatBits(selected, true) : NearestFloatBits(selected);
                         const auto expected = InsertResult(bits, destination, unused);
                         const auto actual = ConversionOutput[lane * ConversionResults + index];
                         Require(actual == expected, "sdwa integer-to-f32: lane " + std::to_string(lane) +
